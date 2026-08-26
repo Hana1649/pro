@@ -17,7 +17,7 @@ from xgboost import XGBClassifier
 
 from sklearn.metrics import classification_report, confusion_matrix, f1_score
 
-df = pd.read_csv(r"C:\Users\pc\Downloads\Prolect\android_games_eda_ready.csv")
+df = pd.read_csv("android_games_eda_ready.csv")
 df.drop_duplicates(inplace=True)
 
 cols_to_drop = [
