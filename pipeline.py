@@ -15,91 +15,94 @@ from sklearn.naive_bayes import GaussianNB
 from sklearn.svm import SVC
 from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
 from xgboost import XGBClassifier
-from sklearn.metrics import f1_score, accuracy_score, precision_score, recall_score, confusion_matrix
+from sklearn.metrics import f1_score, accuracy_score, precision_score, recall_score
 
 st.set_page_config(page_title="Android Games Hit Predictor", layout="wide")
 
 st.title("🎮 Android Games Hit Prediction Dashboard")
 st.write("Predict whether an Android game will become a **Hit Game** using Machine Learning pipelines.")
 
-# Load Data
 @st.cache_data
-def load_data():
+def load_and_preprocess_data():
     df = pd.read_csv("android_games_eda_ready.csv")
     df.drop_duplicates(inplace=True)
-    return df
+    
+    cols_to_drop = [
+        'game_id', 'game_name', 'package_name', 'developer_name',
+        'release_date', 'soft_launch_date', 'last_update_date',
+        'featured_start_date', 'featured_end_date', 'row_checksum_id'
+    ]
+    df_prep = df.drop(columns=[c for c in cols_to_drop if c in df.columns])
+    
+    X = df_prep.drop(columns=['is_hit_game'])
+    y = df_prep['is_hit_game']
+    
+    num_cols = X.select_dtypes(include=np.number).columns.tolist()
+    cat_cols = X.select_dtypes(include=['object', 'category']).columns.tolist()
+    
+    X_train, X_test, y_train, y_test = train_test_split(
+        X, y, test_size=0.2, random_state=42, stratify=y
+    )
+    
+    return X, y, X_train, X_test, y_train, y_test, num_cols, cat_cols
 
 try:
-    df = load_data()
+    X, y, X_train, X_test, y_train, y_test, num_cols, cat_cols = load_and_preprocess_data()
 except Exception as e:
     st.error(f"Error loading dataset: {e}")
     st.stop()
 
-# Data Preprocessing Setup
-cols_to_drop = [
-    'game_id', 'game_name', 'package_name', 'developer_name',
-    'release_date', 'soft_launch_date', 'last_update_date',
-    'featured_start_date', 'featured_end_date', 'row_checksum_id'
-]
-df_prep = df.drop(columns=[c for c in cols_to_drop if c in df.columns])
+# Build preprocessor constructor helper
+def build_preprocessor():
+    num_transformer = Pipeline(steps=[
+        ('imputer', SimpleImputer(strategy='median')),
+        ('scaler', StandardScaler())
+    ])
 
-X = df_prep.drop(columns=['is_hit_game'])
-y = df_prep['is_hit_game']
+    cat_transformer = Pipeline(steps=[
+        ('imputer', SimpleImputer(strategy='constant', fill_value='Unknown')),
+        ('encoder', OneHotEncoder(handle_unknown='ignore', sparse_output=False))
+    ])
 
-num_cols = X.select_dtypes(include=np.number).columns.tolist()
-cat_cols = X.select_dtypes(include=['object', 'category']).columns.tolist()
+    return ColumnTransformer(transformers=[
+        ('num', num_transformer, num_cols),
+        ('cat', cat_transformer, cat_cols)
+    ])
 
-# Data Splitting
-X_train, X_test, y_train, y_test = train_test_split(
-    X, y, test_size=0.2, random_state=42, stratify=y
-)
-
-# Pipelines Setup
-num_transformer = Pipeline(steps=[
-    ('imputer', SimpleImputer(strategy='median')),
-    ('scaler', StandardScaler())
-])
-
-cat_transformer = Pipeline(steps=[
-    ('imputer', SimpleImputer(strategy='constant', fill_value='Unknown')),
-    ('encoder', OneHotEncoder(handle_unknown='ignore', sparse_output=False))
-])
-
-preprocessor = ColumnTransformer(transformers=[
-    ('num', num_transformer, num_cols),
-    ('cat', cat_transformer, cat_cols)
-])
-
-# Train Models Function
 @st.cache_resource
 def train_models(X_tr, y_tr):
+    # Dynamic scale_pos_weight calculation for XGBoost
+    negative_count = (y_tr == 0).sum()
+    positive_count = (y_tr == 1).sum()
+    dynamic_scale = negative_count / positive_count if positive_count > 0 else 1.0
+
     model_dict = {
         'XGBoost': Pipeline([
-            ('preprocessor', preprocessor),
-            ('classifier', XGBClassifier(n_estimators=150, learning_rate=0.05, max_depth=3, max_leaves=5, random_state=42, scale_pos_weight=7000/200))
+            ('preprocessor', build_preprocessor()),
+            ('classifier', XGBClassifier(n_estimators=150, learning_rate=0.05, max_depth=3, max_leaves=5, random_state=42, scale_pos_weight=dynamic_scale))
         ]),
         'Random Forest': Pipeline([
-            ('preprocessor', preprocessor),
+            ('preprocessor', build_preprocessor()),
             ('classifier', RandomForestClassifier(n_estimators=100, max_depth=10, class_weight='balanced', random_state=42))
         ]),
         'Gradient Boosting': Pipeline([
-            ('preprocessor', preprocessor),
+            ('preprocessor', build_preprocessor()),
             ('classifier', GradientBoostingClassifier(n_estimators=100, max_depth=4, random_state=42))
         ]),
         'Decision Tree': Pipeline([
-            ('preprocessor', preprocessor),
+            ('preprocessor', build_preprocessor()),
             ('classifier', DecisionTreeClassifier(max_depth=6, class_weight='balanced', random_state=42))
         ]),
         'SVM': Pipeline([
-            ('preprocessor', preprocessor),
+            ('preprocessor', build_preprocessor()),
             ('classifier', SVC(kernel='rbf', class_weight='balanced', random_state=42, probability=True))
         ]),
         'KNN': Pipeline([
-            ('preprocessor', preprocessor),
+            ('preprocessor', build_preprocessor()),
             ('classifier', KNeighborsClassifier(n_neighbors=5))
         ]),
         'Naive Bayes (PCA)': Pipeline([
-            ('preprocessor', preprocessor),
+            ('preprocessor', build_preprocessor()),
             ('pca', PCA(n_components=0.95, random_state=42)),
             ('classifier', GaussianNB())
         ])
